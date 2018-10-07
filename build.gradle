@@ -1,0 +1,286 @@
+buildscript {
+    ext {
+        protoProjects = [
+                project(':grpc-auth-java'),
+        ]
+
+        implProjects = []
+        
+        graphqlProject = project(':graphql-api')
+    }
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        jcenter()
+        maven { url "https://plugins.gradle.org/m2/" }
+        maven { url 'http://repo.spring.io/plugins-release' }
+    }
+    dependencies {
+        classpath "net.researchgate:gradle-release:$gradle_release"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$gradle_kotlin"
+        classpath "com.jfrog.bintray.gradle:gradle-bintray-plugin:$gradle_bintray"
+        classpath("org.springframework.boot:spring-boot-gradle-plugin:$springBootVersion")
+        classpath "com.google.protobuf:protobuf-gradle-plugin:$gradle_protobuf"
+    }
+}
+apply plugin: 'net.researchgate.release'
+
+release {
+    failOnPublishNeeded = true
+}
+allprojects {
+    apply plugin: "java"
+    apply plugin: 'maven'
+    apply plugin: 'maven-publish'
+    apply plugin: "com.jfrog.bintray"
+
+    group = PROJECT_GROUP
+
+    sourceCompatibility = SOURCE_COMPATIBILITY
+    targetCompatibility = TARGET_COMPATIBILITY
+    
+    repositories {
+        mavenLocal()
+        maven { url 'http://maven.aliyun.com/nexus/content/groups/public/' }
+        mavenCentral()
+        jcenter()
+    }
+
+    
+    
+    tasks.withType(Javadoc) {
+        options.addStringOption('Xdoclint:none', '-quiet')
+        options.addStringOption('encoding', 'UTF-8')
+        options.addStringOption('charSet', 'UTF-8')
+    }
+
+    tasks.withType(JavaCompile) {
+        options.encoding = "UTF-8"
+        options.warnings = false
+    }
+
+    tasks.withType(Test) {
+        reports.junitXml.enabled = true
+        reports.html.enabled = false
+    }
+
+    jar {
+        from "LICENSE.md"
+    }
+
+    task sourcesJar(type: Jar) {
+        dependsOn classes
+        classifier 'sources'
+        from sourceSets.main.allSource
+    }
+
+    task javadocJar(type: Jar, dependsOn: javadoc) {
+        classifier = 'javadoc'
+        from javadoc.destinationDir
+    }
+
+    artifacts {
+        archives sourcesJar
+        archives javadocJar
+    }
+
+    publishing {
+        repositories {
+            maven {
+                name 'release'
+                if (project.version.endsWith('-SNAPSHOT')) {
+                    url = "http://192.168.1.250:8081/nexus/content/repositories/snapshot"
+                } else {
+                    url = "http://192.168.1.250:8081/nexus/content/repositories/release"
+                }
+
+                credentials {
+                    username nexusUsername
+                    password nexusPassword
+                }
+            }
+
+            maven {
+                name 'central'
+                url = "http://192.168.1.250:8081/nexus/content/repositories/central"
+
+                credentials {
+                    username nexusUsername
+                    password nexusPassword
+                }
+            }
+        }
+        publications {
+            maven(MavenPublication) {
+                version version
+                from components.java
+
+                artifact sourcesJar {
+                    classifier "sources"
+                }
+                artifact javadocJar {
+                    classifier "javadoc"
+                }
+
+
+                pom.withXml {
+                    // Fix dependency scoping.
+                    asNode().dependencies.'*'.findAll() {
+                        it.scope.text() == 'runtime' && project.configurations.compile.allDependencies.find { dep ->
+                            dep.name == it.artifactId.text()
+                        }
+                    }.each() {
+                        it.scope*.value = 'compile'
+                    }
+
+                    asNode().children().last() + {
+                        resolveStrategy = Closure.DELEGATE_FIRST
+                        name PROJECT_NAME
+                        description PROJECT_DESC
+                        url PROJECT_GIT_REPO_URL
+                        scm {
+                            url PROJECT_GIT_REPO_URL
+                            connection PROJECT_GIT_REPO_URL
+                            developerConnection PROJECT_GIT_REPO_URL
+                        }
+                        licenses {
+                            license {
+                                name PROJECT_LICENSE
+                                url PROJECT_LICENSE_URL
+                                distribution 'repo'
+                            }
+                        }
+                        developers {
+                            developer {
+                                id PROJECT_DEV_ID
+                                name PROJECT_DEV_NAME
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    bintray {
+        user = System.env.BINTRAY_USER ?: project.findProperty('BINTRAY_USER') ?: ''
+        key = System.env.BINTRAY_PASS ?: project.findProperty('BINTRAY_PASS') ?: ''
+        publications = ['maven']
+        publish = true
+        pkg {
+            repo = 'releases'
+            name = PROJECT_NAME
+            desc = PROJECT_DESC
+            licenses = [PROJECT_LICENSE]
+            vcsUrl = PROJECT_GIT_REPO_URL
+            userOrg = 'silencecorner'
+            version {
+                name = project.version
+                vcsTag = project.version
+            }
+        }
+    }
+}
+
+
+configure(protoProjects) {
+    apply plugin: 'idea'
+    apply plugin: 'com.google.protobuf'
+    
+    dependencies {
+        compile "io.grpc:grpc-netty-shaded:$java_grpc"
+        compile "io.grpc:grpc-protobuf:$java_grpc"
+        compile "io.grpc:grpc-stub:$java_grpc"
+    }
+
+    sourceSets.main.java.srcDir file("$buildDir/generated/source/grpc/main")
+
+    idea {
+        module {
+            sourceDirs += file("${protobuf.generatedFilesBaseDir}/main/java");
+            sourceDirs += file("${protobuf.generatedFilesBaseDir}/main/grpc");
+        }
+    }
+
+    sourceSets {
+        main {
+            java {
+                srcDirs += "${protobuf.generatedFilesBaseDir}/main/java"
+                srcDirs += "${protobuf.generatedFilesBaseDir}/main/grpc"
+            }
+        }
+    }
+
+    protobuf {
+        protoc {
+            artifact = "com.google.protobuf:protoc:$protoc"
+        }
+        plugins {
+            grpc {
+                artifact = "io.grpc:protoc-gen-grpc-java:$java_grpc"
+            }
+        }
+        generateProtoTasks {
+            all()*.plugins {
+                grpc {}
+            }
+        }
+    }
+
+    clean {
+        delete protobuf.generatedFilesBaseDir
+    }
+}
+
+configure(implProjects) {
+    apply plugin: "groovy"
+    apply plugin: 'idea'
+    apply plugin: 'org.jetbrains.kotlin.jvm'
+
+    dependencies {
+        compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+        testCompile group: 'junit', name: 'junit', version: '4.12'
+        testCompile "org.spockframework:spock-core:$spock_version"
+    }
+
+    compileKotlin {
+        kotlinOptions.jvmTarget = TARGET_COMPATIBILITY
+    }
+    compileTestKotlin {
+        kotlinOptions.jvmTarget = TARGET_COMPATIBILITY
+    }
+
+    idea {
+        module {
+            downloadJavadoc = true
+            downloadSources = true
+        }
+    }
+
+}
+
+configure(graphqlProject){
+    apply plugin: "groovy"
+    apply plugin: 'idea'
+    apply plugin: 'org.jetbrains.kotlin.jvm'
+
+    dependencies {
+        compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+        testCompile group: 'junit', name: 'junit', version: '4.12'
+        testCompile "org.spockframework:spock-core:$spock_version"
+    }
+
+    compileKotlin {
+        kotlinOptions.jvmTarget = TARGET_COMPATIBILITY
+    }
+    compileTestKotlin {
+        kotlinOptions.jvmTarget = TARGET_COMPATIBILITY
+    }
+
+    idea {
+        module {
+            downloadJavadoc = true
+            downloadSources = true
+        }
+    }
+}

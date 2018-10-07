@@ -1,0 +1,4 @@
+rootProject.name = 'common-mall'
+
+include 'grpc-auth-java'
+include 'graphql-api'
